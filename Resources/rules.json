@@ -1,0 +1,111 @@
+{
+  "rules": [
+    {
+      "id": "thunder",
+      "when": {
+        "thunder": true
+      },
+      "impact": "high",
+      "priority": 100
+    },
+    {
+      "id": "heavy_rain",
+      "when": {
+        "mode": ["walk", "bike"],
+        "rain_gte": 1.0
+      },
+      "impact": "high",
+      "priority": 90
+    },
+    {
+      "id": "light_rain",
+      "when": {
+        "mode": ["walk", "bike"],
+        "rain_gte": 0.1,
+        "rain_lt": 1.0
+      },
+      "impact": "mid",
+      "priority": 60
+    },
+    {
+      "id": "strong_wind",
+      "when": {
+        "mode": ["bike"],
+        "wind_gte": 8.0
+      },
+      "impact": "high",
+      "priority": 80
+    },
+    {
+      "id": "heat",
+      "when": {
+        "feels_gte": 30.0
+      },
+      "impact": "high",
+      "priority": 70
+    },
+    {
+      "id": "cold",
+      "when": {
+        "feels_lte": 5.0
+      },
+      "impact": "mid",
+      "priority": 50
+    },
+    {
+      "id": "low_vis",
+      "when": {
+        "visibility_lt": 2.0
+      },
+      "impact": "mid",
+      "priority": 40
+    }
+  ],
+  "messages": {
+    "thunder": "雷注意。屋内退避プラン",
+    "heavy_rain": "傘必須・撥水上着で",
+    "light_rain": "折りたたみ傘あると安心",
+    "strong_wind": "向かい風強。徒歩＋5分も",
+    "heat": "暑い。給水＆汗対策",
+    "cold": "冷えます。手袋/マフラーなど防寒を",
+    "low_vis": "視界不良。横断注意"
+  },
+  "suffix": {
+    "rain": "☔%.1fmm/h",
+    "wind": "風%.0fm/s",
+    "feels": "体感%.0f℃"
+  },
+  "wear": [
+    {
+      "min": 4,
+      "max": 99,
+      "text": "昨日より暖かい。薄着でOK"
+    },
+    {
+      "min": 2,
+      "max": 3,
+      "text": "少し暖かい。1枚軽めで"
+    },
+    {
+      "min": -1,
+      "max": 1,
+      "text": "昨日と同じくらい。いつも通り"
+    },
+    {
+      "min": -3,
+      "max": -2,
+      "text": "少し寒い。1枚足して"
+    },
+    {
+      "min": -99,
+      "max": -4,
+      "text": "昨日より冷える。厚着推奨"
+    }
+  ],
+  "wearAdjust": {
+    "wind_ms_gte": 6,
+    "rain_mmph_gte": 1,
+    "delta_minus": 1
+  }
+}
+
