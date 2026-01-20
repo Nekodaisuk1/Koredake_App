@@ -18,6 +18,7 @@ struct RouteDetailView: View {
     @State private var showingEdit = false
 
     private let evaluator = RouteRiskEvaluator(weather: OpenMeteoClient())
+    private let rules = RuleEngine()
     private let tempDeltaThreshold = 3.0
 
     var body: some View {
@@ -61,7 +62,7 @@ struct RouteDetailView: View {
     }
 
     private func routeMap(detail: RouteRiskDetail) -> some View {
-        let weatherAlerts = worseningPoints(in: detail.samples)
+        let weatherAlerts = weatherChangePoints(in: detail.samples)
         let tempAlerts = temperatureChangePoints(in: detail.samples, threshold: tempDeltaThreshold)
         let items = buildAnnotations(weatherAlerts: weatherAlerts, tempAlerts: tempAlerts)
         return RouteDetailMapView(route: detail.route, annotations: items)
@@ -82,14 +83,14 @@ struct RouteDetailView: View {
 
     private func riskLists(detail: RouteRiskDetail) -> some View {
         let tempAlerts = temperatureChangePoints(in: detail.samples, threshold: tempDeltaThreshold)
-        let weatherAlerts = worseningPoints(in: detail.samples)
+        let weatherAlerts = weatherChangePoints(in: detail.samples)
 
         return VStack(alignment: .leading, spacing: 8) {
             if !weatherAlerts.isEmpty {
-                Text("天候悪化ポイント")
+                Text("天候変化ポイント")
                     .font(.headline)
                 ForEach(weatherAlerts.prefix(6)) { sample in
-                    Text("\(timeString(sample.time)) \(impactLabel(sample.impact))")
+                    Text("\(timeString(sample.time)) \(weatherChangeLabel(for: sample))")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -109,15 +110,18 @@ struct RouteDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func worseningPoints(in samples: [RouteRiskSample]) -> [RouteRiskSample] {
+    private func weatherChangePoints(in samples: [RouteRiskSample]) -> [RouteRiskSample] {
         var results: [RouteRiskSample] = []
-        var previousImpact: Impact?
-        for sample in samples {
-            guard sample.wx != nil else { continue }
-            if let prev = previousImpact, sample.impact.rawValue > prev.rawValue {
+        let sorted = samples.sorted { $0.time < $1.time }
+        var previousKey: String?
+        for sample in sorted {
+            guard let wx = sample.wx else { continue }
+            let matches = rules.matchingRules(mode: sample.mode, wx: wx, rainAversion: 2)
+            let key = matches.map { $0.id }.sorted().joined(separator: ",")
+            if let prev = previousKey, key != prev {
                 results.append(sample)
             }
-            previousImpact = sample.impact
+            previousKey = key
         }
         return results
     }
@@ -137,6 +141,16 @@ struct RouteDetailView: View {
 
     private func impactLabel(_ impact: Impact) -> String {
         ["低", "中", "高"][impact.rawValue]
+    }
+
+    private func weatherChangeLabel(for sample: RouteRiskSample) -> String {
+        guard let wx = sample.wx else { return "天候変化" }
+        let matches = rules.matchingRules(mode: sample.mode, wx: wx, rainAversion: 2)
+        let top = matches.sorted { $0.priority > $1.priority }.first?.id
+        if let tag = top, let msg = rules.message(for: tag) {
+            return msg.split(separator: "。").first.map(String.init) ?? msg
+        }
+        return "天候変化"
     }
 
     private func timeString(_ date: Date) -> String {
@@ -284,7 +298,7 @@ private extension RouteDetailView {
     func buildAnnotations(weatherAlerts: [RouteRiskSample], tempAlerts: [RouteRiskSample]) -> [RouteDetailAnnotation] {
         var output: [RouteDetailAnnotation] = []
         for sample in weatherAlerts {
-            output.append(RouteDetailAnnotation(title: "悪化", coordinate: sample.coordinate, kind: .weather))
+            output.append(RouteDetailAnnotation(title: "変化", coordinate: sample.coordinate, kind: .weather))
         }
         for sample in tempAlerts {
             let temp = Int(sample.wx?.feels ?? 0)

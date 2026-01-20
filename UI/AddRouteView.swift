@@ -108,6 +108,7 @@ struct AddRouteView: View {
                         MapPreview(
                             fromPlace: fromLatLng,
                             toPlace: toLatLng,
+                            mode: mode,
                             fromName: fromPlace.isEmpty ? "出発地" : fromPlace,
                             toName: toPlace.isEmpty ? "到着地" : toPlace
                         )

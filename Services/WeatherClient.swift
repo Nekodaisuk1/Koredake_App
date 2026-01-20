@@ -42,7 +42,7 @@ actor WeatherCache {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
         fileURL = (caches ?? URL(fileURLWithPath: NSTemporaryDirectory()))
             .appendingPathComponent("weather_cache.json")
-        loadFromDisk()
+        storage = Self.loadFromDisk(fileURL: fileURL)
     }
 
     func get(_ key: String) -> [WxFeature]? {
@@ -69,12 +69,12 @@ actor WeatherCache {
         }
     }
 
-    private func loadFromDisk() {
+    private static func loadFromDisk(fileURL: URL) -> [String: Entry] {
         guard let data = try? Data(contentsOf: fileURL),
               let payload = try? JSONDecoder().decode(CacheFile.self, from: data) else {
-            return
+            return [:]
         }
-        storage = payload.entries
+        return payload.entries
     }
 }
 
