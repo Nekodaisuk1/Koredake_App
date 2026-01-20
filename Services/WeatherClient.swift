@@ -35,7 +35,7 @@ actor WeatherCache {
     }
 
     private var storage: [String: Entry] = [:]
-    private let ttl: TimeInterval = 10 * 60
+    private let ttl: TimeInterval = 12 * 60 * 60
     private let fileURL: URL
 
     init() {
@@ -53,8 +53,12 @@ actor WeatherCache {
         return entry.data
     }
 
-    func getStale(_ key: String) -> [WxFeature]? {
-        storage[key]?.data
+    func getStaleWithin(_ key: String, maxAge: TimeInterval) -> [WxFeature]? {
+        guard let entry = storage[key] else { return nil }
+        if Date().timeIntervalSince(entry.fetchedAt) > maxAge {
+            return nil
+        }
+        return entry.data
     }
 
     func set(_ key: String, data: [WxFeature]) {
@@ -135,7 +139,7 @@ final class OpenMeteoClient: WeatherClient {
             await Self.cache.set(key, data: arr)
             return arr
         } catch {
-            if let fallback = await Self.cache.getStale(key) {
+            if let fallback = await Self.cache.getStaleWithin(key, maxAge: 12 * 60 * 60) {
                 return fallback
             }
             throw error

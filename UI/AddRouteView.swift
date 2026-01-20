@@ -43,181 +43,205 @@ struct AddRouteView: View {
     init(editingSegment: Segment? = nil, onSave: @escaping () -> Void) {
         self.editingSegment = editingSegment
         self.onSave = onSave
+        
+        // 編集モードの場合、初期値を設定
+        if let segment = editingSegment {
+            _mode = State(initialValue: segment.mode)
+            _selectedDays = State(initialValue: Set(segment.dow))
+            _fromPlace = State(initialValue: segment.fromPlace)
+            _toPlace = State(initialValue: segment.toPlace)
+            _fromLatLng = State(initialValue: segment.latLngFrom)
+            _toLatLng = State(initialValue: segment.latLngTo)
+            _durationMin = State(initialValue: segment.durationMin)
+            
+            // 時刻をDateに変換
+            let timeParts = segment.startTime.split(separator: ":").compactMap { Int($0) }
+            if timeParts.count == 2 {
+                var components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: Date())
+                components.hour = timeParts[0]
+                components.minute = timeParts[1]
+                if let time = Calendar.current.date(from: components) {
+                    _goTime = State(initialValue: time)
+                }
+            }
+            
+            if let target = segment.targetArrivalTime {
+                let targetParts = target.split(separator: ":").compactMap { Int($0) }
+                if targetParts.count == 2 {
+                    var components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: Date())
+                    components.hour = targetParts[0]
+                    components.minute = targetParts[1]
+                    if let time = Calendar.current.date(from: components) {
+                        _goArrivalTime = State(initialValue: time)
+                        _goArrivalEnabled = State(initialValue: true)
+                    }
+                }
+            }
+        }
     }
     
     var body: some View {
         NavigationView {
-            Form {
-                // 移動手段
-                Section("移動手段") {
-                    Picker("移動手段", selection: $mode) {
-                        Text("徒歩").tag(Mode.walk)
-                        Text("自転車").tag(Mode.bike)
-                        Text("電車").tag(Mode.train)
-                        Text("バス").tag(Mode.bus)
-                    }
-                    .pickerStyle(.segmented)
+            formBody
+                .navigationTitle(editingSegment == nil ? "ルート追加" : "ルート編集")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { toolbarContent }
+                .sheet(isPresented: $showingFromPicker) {
+                    PlacePicker(selectedPlace: $fromPlaceObj, placeholder: "出発地を検索")
                 }
-                
-                // 曜日
-                Section("曜日") {
-                    HStack {
-                        ForEach(1...7, id: \.self) { day in
-                            Button {
-                                if selectedDays.contains(day) {
-                                    selectedDays.remove(day)
-                                } else {
-                                    selectedDays.insert(day)
-                                }
-                            } label: {
-                                Text(daysOfWeek[day - 1])
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 8)
-                                    .background(selectedDays.contains(day) ? Color.blue : Color.gray.opacity(0.2))
-                                    .foregroundColor(selectedDays.contains(day) ? .white : .primary)
-                                    .cornerRadius(8)
-                            }
-                        }
+                .sheet(isPresented: $showingToPicker) {
+                    PlacePicker(selectedPlace: $toPlaceObj, placeholder: "到着地を検索")
+                }
+                .onChange(of: fromPlaceObj) { newValue in
+                    if let place = newValue {
+                        fromPlace = place.name
+                        fromLatLng = place.coordinate
                     }
                 }
-                
-                // 行き
-                Section("行き") {
-                    HStack {
-                        Text("出発地")
-                        Spacer()
-                        Button(fromPlace.isEmpty ? "選択" : fromPlace) {
-                            showingFromPicker = true
-                        }
-                    }
-                    HStack {
-                        Text("到着地")
-                        Spacer()
-                        Button(toPlace.isEmpty ? "選択" : toPlace) {
-                            showingToPicker = true
-                        }
-                    }
-                    DatePicker("出発時刻", selection: $goTime, displayedComponents: .hourAndMinute)
-                    Toggle("到着希望時刻", isOn: $goArrivalEnabled)
-                    if goArrivalEnabled {
-                        DatePicker("到着希望", selection: $goArrivalTime, displayedComponents: .hourAndMinute)
-                    }
-                    
-                    // 地図プレビュー
-                    if fromLatLng != nil || toLatLng != nil {
-                        MapPreview(
-                            fromPlace: fromLatLng,
-                            toPlace: toLatLng,
-                            mode: mode,
-                            fromName: fromPlace.isEmpty ? "出発地" : fromPlace,
-                            toName: toPlace.isEmpty ? "到着地" : toPlace
-                        )
+                .onChange(of: toPlaceObj) { newValue in
+                    if let place = newValue {
+                        toPlace = place.name
+                        toLatLng = place.coordinate
                     }
                 }
-                
-                // 帰り
-                Section("帰り") {
-                    Toggle("帰りは行きと同じ", isOn: $sameReturn)
-                    if !sameReturn {
-                        HStack {
-                            Text("出発地")
-                            Spacer()
-                            Button("選択") {
-                                // TODO: Places Picker（行きの到着地をデフォルト）
-                            }
-                        }
-                        HStack {
-                            Text("到着地")
-                            Spacer()
-                            Button("選択") {
-                                // TODO: Places Picker（行きの出発地をデフォルト）
-                            }
-                        }
-                    }
-                    DatePicker("帰りの時刻", selection: $returnTime, displayedComponents: .hourAndMinute)
-                    Toggle("到着希望時刻", isOn: $returnArrivalEnabled)
-                    if returnArrivalEnabled {
-                        DatePicker("到着希望", selection: $returnArrivalTime, displayedComponents: .hourAndMinute)
-                    }
-                }
-                
-                // 所要時間（暫定）
-                Section("所要時間") {
-                    Stepper("\(durationMin)分", value: $durationMin, in: 5...120, step: 5)
-                }
+        }
+    }
+
+    private var formBody: some View {
+        Form {
+            moveSection
+            weekdaySection
+            outboundSection
+            returnSection
+            durationSection
+        }
+    }
+
+    private var moveSection: some View {
+        Section("移動手段") {
+            Picker("移動手段", selection: $mode) {
+                Text("徒歩").tag(Mode.walk)
+                Text("自転車").tag(Mode.bike)
+                Text("電車").tag(Mode.train)
+                Text("バス").tag(Mode.bus)
             }
-            .navigationTitle(editingSegment == nil ? "ルート追加" : "ルート編集")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    HStack(spacing: 12) {
-                        if editingSegment != nil {
-                            Button(role: .destructive) {
-                                deleteRoute()
-                            } label: { Text("削除") }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private var weekdaySection: some View {
+        Section("曜日") {
+            HStack {
+                ForEach(1...7, id: \.self) { day in
+                    Button {
+                        if selectedDays.contains(day) {
+                            selectedDays.remove(day)
+                        } else {
+                            selectedDays.insert(day)
                         }
-                        Button("キャンセル") { dismiss() }
+                    } label: {
+                        Text(daysOfWeek[day - 1])
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(selectedDays.contains(day) ? Color.blue : Color.gray.opacity(0.2))
+                            .foregroundColor(selectedDays.contains(day) ? .white : .primary)
+                            .cornerRadius(8)
                     }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("保存") {
-                        saveRoute()
-                    }
-                    .disabled(fromPlace.isEmpty || toPlace.isEmpty || selectedDays.isEmpty)
-                }
-            }
-            .sheet(isPresented: $showingFromPicker) {
-                PlacePicker(selectedPlace: $fromPlaceObj, placeholder: "出発地を検索")
-            }
-            .sheet(isPresented: $showingToPicker) {
-                PlacePicker(selectedPlace: $toPlaceObj, placeholder: "到着地を検索")
-            }
-            .onChange(of: fromPlaceObj) { newValue in
-                if let place = newValue {
-                    print("🟢 AddRouteView: selected fromPlace -> \(place.name) @ \(place.coordinate.latitude),\(place.coordinate.longitude)")
-                    fromPlace = place.name
-                    fromLatLng = place.coordinate
-                }
-            }
-            .onChange(of: toPlaceObj) { newValue in
-                if let place = newValue {
-                    print("🔴 AddRouteView: selected toPlace -> \(place.name) @ \(place.coordinate.latitude),\(place.coordinate.longitude)")
-                    toPlace = place.name
-                    toLatLng = place.coordinate
                 }
             }
         }
-        .onAppear {
-            if let segment = editingSegment {
-                // 編集モードの場合、既存データを読み込む
-                mode = segment.mode
-                selectedDays = Set(segment.dow)
-                fromPlace = segment.fromPlace
-                toPlace = segment.toPlace
-                fromLatLng = segment.latLngFrom
-                toLatLng = segment.latLngTo
-                
-                // 時刻をDateに変換
-                let timeParts = segment.startTime.split(separator: ":").compactMap { Int($0) }
-                if timeParts.count == 2 {
-                    var components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: Date())
-                    components.hour = timeParts[0]
-                    components.minute = timeParts[1]
-                    goTime = Calendar.current.date(from: components) ?? Date()
-                }
+    }
 
-                if let target = segment.targetArrivalTime {
-                    let targetParts = target.split(separator: ":").compactMap { Int($0) }
-                    if targetParts.count == 2 {
-                        var components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: Date())
-                        components.hour = targetParts[0]
-                        components.minute = targetParts[1]
-                        goArrivalTime = Calendar.current.date(from: components) ?? Date()
-                        goArrivalEnabled = true
+    private var outboundSection: some View {
+        Section("行き") {
+            HStack {
+                Text("出発地")
+                Spacer()
+                Button(fromPlace.isEmpty ? "選択" : fromPlace) {
+                    showingFromPicker = true
+                }
+            }
+            HStack {
+                Text("到着地")
+                Spacer()
+                Button(toPlace.isEmpty ? "選択" : toPlace) {
+                    showingToPicker = true
+                }
+            }
+            DatePicker("出発時刻", selection: $goTime, displayedComponents: .hourAndMinute)
+            Toggle("到着希望時刻", isOn: $goArrivalEnabled)
+            if goArrivalEnabled {
+                DatePicker("到着希望", selection: $goArrivalTime, displayedComponents: .hourAndMinute)
+            }
+
+            if fromLatLng != nil || toLatLng != nil {
+                Section {
+                    MapPreview(
+                        fromPlace: fromLatLng,
+                        toPlace: toLatLng,
+                        mode: mode,
+                        fromName: fromPlace.isEmpty ? "出発地" : fromPlace,
+                        toName: toPlace.isEmpty ? "到着地" : toPlace,
+                        showWeatherPoints: false
+                    )
+                    .listRowInsets(EdgeInsets())
+                } header: {
+                    Text("ルートプレビュー")
+                }
+            }
+        }
+    }
+
+    private var returnSection: some View {
+        Section("帰り") {
+            Toggle("帰りは行きと同じ", isOn: $sameReturn)
+            if !sameReturn {
+                HStack {
+                    Text("出発地")
+                    Spacer()
+                    Button("選択") {
+                        // TODO: Places Picker（行きの到着地をデフォルト）
                     }
                 }
-                
-                durationMin = segment.durationMin
+                HStack {
+                    Text("到着地")
+                    Spacer()
+                    Button("選択") {
+                        // TODO: Places Picker（行きの出発地をデフォルト）
+                    }
+                }
+            }
+            DatePicker("帰りの時刻", selection: $returnTime, displayedComponents: .hourAndMinute)
+            Toggle("到着希望時刻", isOn: $returnArrivalEnabled)
+            if returnArrivalEnabled {
+                DatePicker("到着希望", selection: $returnArrivalTime, displayedComponents: .hourAndMinute)
+            }
+        }
+    }
+
+    private var durationSection: some View {
+        Section("所要時間") {
+            Stepper("\(durationMin)分", value: $durationMin, in: 5...120, step: 5)
+        }
+    }
+
+    private var toolbarContent: some ToolbarContent {
+        Group {
+            ToolbarItem(placement: .navigationBarLeading) {
+                HStack(spacing: 12) {
+                    if editingSegment != nil {
+                        Button(role: .destructive) {
+                            deleteRoute()
+                        } label: { Text("削除") }
+                    }
+                    Button("キャンセル") { dismiss() }
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("保存") {
+                    saveRoute()
+                }
+                .disabled(fromPlace.isEmpty || toPlace.isEmpty || selectedDays.isEmpty)
             }
         }
     }
@@ -272,7 +296,6 @@ struct AddRouteView: View {
         }
         
         // Perform file IO on a background queue to avoid blocking the main thread
-        print("💾 AddRouteView: starting save of route...")
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 if let editing = editingSegment {
@@ -284,7 +307,6 @@ struct AddRouteView: View {
                     // 新規追加モード
                     try store.addSegments([goSegment, returnSegment])
                 }
-                print("💾 AddRouteView: save completed")
                 DispatchQueue.main.async {
                     onSave()
                     // Ask the widget to refresh immediately
@@ -309,7 +331,6 @@ struct AddRouteView: View {
     private func deleteRoute() {
         guard let editing = editingSegment else { return }
         let store = SegmentStore.shared
-        print("🗑️ AddRouteView: deleting segment \(editing.id)")
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try store.deleteSegment(id: editing.id)

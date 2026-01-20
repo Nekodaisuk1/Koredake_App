@@ -12,17 +12,15 @@ struct RouteEntry: TimelineEntry {
     let date: Date
     let title: String
     let impact: Impact
-    let score: Int?
-    let weatherScore: Int?
-    let timeScore: Int?
     let message: String
-    let risks: [String]  // リスクのリスト（例: ["雷注意", "傘必須"]）
     let wearAdvice: String?  // 服装アドバイス（例: "昨日より厚着で"）
+    let maxTemp: Int?
+    let minTemp: Int?
 }
 
 struct Provider: TimelineProvider {
     func placeholder(in context: Context) -> RouteEntry {
-        RouteEntry(date: Date(), title: "今日のリスク", impact: .mid, score: 60, weatherScore: 55, timeScore: 30, message: "", risks: ["折りたたみ傘あると安心"], wearAdvice: "昨日より厚着で")
+        RouteEntry(date: Date(), title: "今日のリスク", impact: .mid, message: "影響 中：折りたたみ傘あると安心", wearAdvice: "昨日より厚着で", maxTemp: 27, minTemp: 18)
     }
     
     func getSnapshot(in context: Context, completion: @escaping (RouteEntry) -> ()) {
@@ -40,7 +38,7 @@ struct Provider: TimelineProvider {
         // today.jsonから実データを読み込む
         guard let (entry, nextUpdate) = loadTodayRisks() else {
             // データがない場合はダミーを返す
-            let dummy = RouteEntry(date: now, title: "データなし", impact: .low, score: nil, weatherScore: nil, timeScore: nil, message: "ルートを追加してください", risks: [], wearAdvice: nil)
+            let dummy = RouteEntry(date: now, title: "データなし", impact: .low, message: "ルートを追加してください", wearAdvice: nil, maxTemp: nil, minTemp: nil)
             completion(Timeline(entries: [dummy], policy: .after(Calendar.current.date(byAdding: .hour, value: 1, to: now)!)))
             return
         }
@@ -59,118 +57,24 @@ struct Provider: TimelineProvider {
         let calendar = Calendar.current
         
     // 全セグメントからリスクを集約（ruleId をキーに最大確率を保持）
-    var allRisksById: [String: (name: String, probability: Int)] = [:]
-        var maxImpact = Impact.low
-        var wearAdvices: [String] = []
-        var maxScore: Int?
-        var maxWeatherScore: Int?
-        var maxTimeScore: Int?
-        
-        for result in results {
-            // 影響度の最大値を更新
-            if result.advice.impact.rawValue > maxImpact.rawValue {
-                maxImpact = result.advice.impact
-            }
-            if let score = result.advice.score {
-                if maxScore == nil || score > (maxScore ?? 0) {
-                    maxScore = score
-                }
-            }
-            if let score = result.advice.weatherScore {
-                if maxWeatherScore == nil || score > (maxWeatherScore ?? 0) {
-                    maxWeatherScore = score
-                }
-            }
-            if let score = result.advice.timeScore {
-                if maxTimeScore == nil || score > (maxTimeScore ?? 0) {
-                    maxTimeScore = score
-                }
-            }
-            
-            // リスク詳細を集約（ruleId をキー）
-            if let riskDetails = result.advice.riskDetails {
-                for risk in riskDetails {
-                    let existing = allRisksById[risk.ruleId]
-                    if existing == nil || risk.probability > existing!.probability {
-                        allRisksById[risk.ruleId] = (name: risk.riskName, probability: risk.probability)
-                    }
-                }
-            }
-            
-            // 服装アドバイスを収集（重複を避ける）
-            if let wear = result.wear {
-                let wearMessage = wear.message
-                if !wearAdvices.contains(wearMessage) {
-                    wearAdvices.append(wearMessage)
-                }
-            }
-        }
-        
-        // 互換グループ: 左側が上位互換
-        let compatibilityGroups: [[String]] = [["heavy_rain", "light_rain"]]
-
-        // グループごとに上位互換だけ残す
-        var remaining = allRisksById
-        var finalIds: [String] = []
-
-        for group in compatibilityGroups {
-            let present = group.filter { remaining[$0] != nil }
-            if present.isEmpty { continue }
-            // present の中で確率が最大のものを選択（確率降順、同率は group の順）
-            let chosen = present.sorted { id1, id2 in
-                let p1 = remaining[id1]?.probability ?? 0
-                let p2 = remaining[id2]?.probability ?? 0
-                if p1 != p2 { return p1 > p2 }
-                let i1 = group.firstIndex(of: id1) ?? Int.max
-                let i2 = group.firstIndex(of: id2) ?? Int.max
-                return i1 < i2
-            }.first
-            if let chosen = chosen { finalIds.append(chosen); remaining.removeValue(forKey: chosen) }
-            for id in present { remaining.removeValue(forKey: id) }
+        guard let next = nextResult(from: results, now: now) else {
+            return nil
         }
 
-        // 残りは確率順で追加
-        let remainingSortedIds = remaining.keys.sorted { id1, id2 in
-            let p1 = remaining[id1]?.probability ?? 0
-            let p2 = remaining[id2]?.probability ?? 0
-            return p1 > p2
-        }
-        finalIds.append(contentsOf: remainingSortedIds)
-
-        // 表示用の名前リストを作成
-        let sortedNames = finalIds.compactMap { allRisksById[$0]?.name ?? /* if removed by group, try to get name from remaining */ nil }
-
-        // 表示条件（40%以上、または上位3つ）
-        let risksToShow: [String]
-        if sortedNames.isEmpty {
-            risksToShow = []
-        } else {
-            // use probabilities from the chosen ids
-            let probs = finalIds.compactMap { id in (allRisksById[id]?.probability) ?? nil }
-            let highFiltered = finalIds.enumerated().filter { index, id in
-                let prob = probs[index]
-                return prob >= 40 || index < 3
-            }.map { idx, id in allRisksById[id]?.name ?? "" }
-            if highFiltered.isEmpty {
-                risksToShow = Array(sortedNames.prefix(3))
-            } else {
-                risksToShow = highFiltered
-            }
-        }
+        let impact = next.advice.impact
+        let impactText = ["低", "中", "高"][impact.rawValue]
+        let message = "影響 \(impactText)：\(next.advice.message)"
+        let wearAdvice = next.wear?.message
         
-        // 服装アドバイス（最初の1つを採用）
-        let wearAdvice = wearAdvices.first
-        
+        let temps = aggregateTemps(from: results)
         let entry = RouteEntry(
             date: now,
             title: "Koredake",
-            impact: maxImpact,
-            score: maxScore,
-            weatherScore: maxWeatherScore,
-            timeScore: maxTimeScore,
-            message: "",
-            risks: risksToShow,
-            wearAdvice: wearAdvice
+            impact: impact,
+            message: message,
+            wearAdvice: wearAdvice,
+            maxTemp: temps.max,
+            minTemp: temps.min
         )
         
     // 次の更新タイミング：定期更新（15分）または次のセグメントの出発時刻のいずれか早い方
@@ -210,6 +114,31 @@ struct Provider: TimelineProvider {
     private func loadNextSegment() -> RouteEntry? {
         return loadTodayRisks()?.0
     }
+
+    private func nextResult(from results: [SegmentResult], now: Date) -> SegmentResult? {
+        let calendar = Calendar.current
+        var candidate: (result: SegmentResult, time: Date)?
+
+        for result in results {
+            let parts = result.segment.startTime.split(separator: ":").compactMap { Int($0) }
+            guard parts.count == 2 else { continue }
+            var comps = calendar.dateComponents([.year, .month, .day], from: now)
+            comps.hour = parts[0]
+            comps.minute = parts[1]
+            guard let time = calendar.date(from: comps) else { continue }
+            let adjusted = time < now ? calendar.date(byAdding: .day, value: 1, to: time) ?? time : time
+            if candidate == nil || adjusted < candidate!.time {
+                candidate = (result, adjusted)
+            }
+        }
+
+        return candidate?.result
+    }
+
+    private func aggregateTemps(from results: [SegmentResult]) -> (max: Int?, min: Int?) {
+        let temps = results.map { Int($0.wxUsed.feels.rounded()) }
+        return (temps.max(), temps.min())
+    }
 }
 
 struct RouteSummaryWidgetEntryView: View {
@@ -231,41 +160,20 @@ struct RouteSummaryWidgetEntryView: View {
                 .font(.headline)
                 .foregroundColor(.white.opacity(0.9))
                 .lineLimit(1)
-            if let score = entry.score {
-                Text("リスク \(score)")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
-            }
-            if let weatherScore = entry.weatherScore, let timeScore = entry.timeScore {
-                Text("天気 \(weatherScore) / 時間 \(timeScore)")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.75))
-            }
-            
-            // リスクリスト
-            if !entry.risks.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(entry.risks, id: \.self) { risk in
-                        Text(risk)
-                            .font(.subheadline)
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                    }
-                }
-            } else if !entry.message.isEmpty {
                 Text(entry.message)
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.9))
                     .lineLimit(2)
-            } else {
-                Text("リスクなし")
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.7))
-            }
-            
-            // 服装アドバイス
-            if let wear = entry.wearAdvice {
-                Text(wear)
+
+                if let maxTemp = entry.maxTemp, let minTemp = entry.minTemp {
+                    Text("最高 \(maxTemp)℃ / 最低 \(minTemp)℃")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                
+                // 服装アドバイス
+                if let wear = entry.wearAdvice {
+                    Text(wear)
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
                     .lineLimit(1)

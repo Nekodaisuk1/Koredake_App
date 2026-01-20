@@ -20,17 +20,36 @@ struct MapPreview: View {
     let mode: Mode
     let fromName: String
     let toName: String
+    let showWeatherPoints: Bool
     @State private var detail: RouteRiskDetail?
+    @State private var route: MKRoute?
     @State private var errorMessage: String?
     private let evaluator = RouteRiskEvaluator(weather: OpenMeteoClient())
     private let rules = RuleEngine()
+    private let routeProvider = MapKitRouteProvider()
     
     var body: some View {
         // Apple Maps (MapKit) を常に使用
-        mapKitPreview
-            .task(id: taskKey) {
-                await loadDetail()
+        VStack(spacing: 8) {
+            mapKitPreview
+            if showWeatherPoints {
+                weatherStrip
             }
+        }
+        .task(id: taskKey) {
+            await loadDetail()
+        }
+        .overlay(alignment: .bottomLeading) {
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption2)
+                    .foregroundColor(.white)
+                    .padding(6)
+                    .background(Color.black.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .padding(8)
+            }
+        }
     }
     
     private var mapKitPreview: some View {
@@ -39,36 +58,82 @@ struct MapPreview: View {
             toPlace: toPlace,
             fromName: fromName,
             toName: toName,
-            route: detail?.route,
+            route: detail?.route ?? route,
             annotations: buildAnnotations()
         )
-        .frame(height: 200)
+        .frame(minWidth: 100, maxWidth: .infinity, minHeight: 200, maxHeight: 200)
         .cornerRadius(8)
     }
 
+    private var weatherStrip: some View {
+        let items = previewWeatherSamples
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(items, id: \.time) { item in
+                    VStack(spacing: 4) {
+                        Text(item.time)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text("\(item.temp)℃")
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                        if let rain = item.rain {
+                            Text("雨 \(rain)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(8)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+
     private var taskKey: String {
-        "\(fromPlace?.latitude ?? 0)-\(fromPlace?.longitude ?? 0)-\(toPlace?.latitude ?? 0)-\(toPlace?.longitude ?? 0)-\(mode.rawValue)"
+        "\(fromPlace?.latitude ?? 0)-\(fromPlace?.longitude ?? 0)-\(toPlace?.latitude ?? 0)-\(toPlace?.longitude ?? 0)-\(mode.rawValue)-\(showWeatherPoints)"
     }
 
     private func loadDetail() async {
         errorMessage = nil
         guard let from = fromPlace, let to = toPlace else {
             detail = nil
+            route = nil
             return
         }
 
         do {
-            detail = try await evaluator.detail(
-                from: from,
-                to: to,
-                mode: mode,
-                departAt: Date(),
-                targetArrival: nil,
-                rainAversion: 2
-            )
+            if showWeatherPoints {
+                detail = try await evaluator.detail(
+                    from: from,
+                    to: to,
+                    mode: mode,
+                    departAt: Date(),
+                    targetArrival: nil,
+                    rainAversion: 2
+                )
+                route = detail?.route
+                if detail == nil {
+                    errorMessage = "ルート情報取得不可"
+                }
+            } else {
+                let routes = try await routeProvider.routes(
+                    from: CLLocationCoordinate2D(latitude: from.latitude, longitude: from.longitude),
+                    to: CLLocationCoordinate2D(latitude: to.latitude, longitude: to.longitude),
+                    mode: mode
+                )
+                detail = nil
+                route = routes.first
+                if route == nil {
+                    errorMessage = "ルート情報取得不可"
+                }
+            }
         } catch {
             errorMessage = error.localizedDescription
             detail = nil
+            route = nil
         }
     }
 
@@ -81,7 +146,7 @@ struct MapPreview: View {
             items.append(RoutePreviewAnnotation(title: toName, coordinate: CLLocationCoordinate2D(latitude: to.latitude, longitude: to.longitude), kind: .end))
         }
 
-        guard let detail else { return items }
+        guard showWeatherPoints, let detail else { return items }
         let changePoints = extractWeatherChangePoints(from: detail.samples)
         items.append(contentsOf: changePoints)
         return items
@@ -91,22 +156,21 @@ struct MapPreview: View {
         var seen: Set<String> = []
         var out: [RoutePreviewAnnotation] = []
         let sorted = samples.sorted { $0.time < $1.time }
-        var previousKey: String?
+        var previousPrimary: String?
         var previousFeels: Double?
 
         for sample in sorted {
             guard let wx = sample.wx else { continue }
             let matches = rules.matchingRules(mode: mode, wx: wx, rainAversion: 2)
-            let tagKey = matches.map { $0.id }.sorted().joined(separator: ",")
+            let primary = matches.sorted { $0.priority > $1.priority }.first?.id
             var changed = false
             var titleParts: [String] = []
 
-            if let prevKey = previousKey, tagKey != prevKey {
-                let top = matches.sorted { $0.priority > $1.priority }.first?.id
-                if let t = top, let msg = rules.message(for: t) {
+            if let prevPrimary = previousPrimary, primary != prevPrimary {
+                if let t = primary, let msg = rules.message(for: t) {
                     let head = msg.split(separator: "。").first.map(String.init) ?? msg
                     titleParts.append(head)
-                } else if !tagKey.isEmpty {
+                } else if primary != nil {
                     titleParts.append("天候変化")
                 }
                 changed = true
@@ -117,7 +181,7 @@ struct MapPreview: View {
                 changed = true
             }
 
-            previousKey = tagKey
+            previousPrimary = primary
             previousFeels = wx.feels
 
             guard changed else { continue }
@@ -131,6 +195,20 @@ struct MapPreview: View {
         }
         return out
     }
+
+    private var previewWeatherSamples: [(time: String, temp: Int, rain: String?)] {
+        guard showWeatherPoints, let detail else { return [] }
+        let df = DateFormatter()
+        df.dateFormat = "HH:mm"
+        let candidates = detail.samples.compactMap { sample -> (String, Int, String?)? in
+            guard let wx = sample.wx else { return nil }
+            let time = df.string(from: sample.time)
+            let temp = Int(wx.feels.rounded())
+            let rain = wx.rain > 0 ? String(format: "%.1fmm/h", wx.rain) : nil
+            return (time, temp, rain)
+        }
+        return Array(candidates.prefix(8))
+    }
 }
 
 private struct RoutePreviewMapView: UIViewRepresentable {
@@ -142,16 +220,27 @@ private struct RoutePreviewMapView: UIViewRepresentable {
     let annotations: [RoutePreviewAnnotation]
 
     func makeUIView(context: Context) -> MKMapView {
-        let mapView = MKMapView(frame: .zero)
+        // 明示的にサイズを設定してCAMetalLayerエラーを回避
+        let mapView = MKMapView(frame: CGRect(x: 0, y: 0, width: 350, height: 200))
         mapView.delegate = context.coordinator
         mapView.isRotateEnabled = false
         mapView.isPitchEnabled = false
-        updateMap(mapView)
+        // 重要: AutoLayoutを有効にする
+        mapView.translatesAutoresizingMaskIntoConstraints = true
+        mapView.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        mapView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // 初期化時は領域設定のみ（オーバーレイは後で追加）
+        if let from = fromPlace, let to = toPlace {
+            updateRegionFallback(mapView, from: from, to: to)
+        }
         return mapView
     }
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
-        updateMap(mapView)
+        // フレームサイズが有効になってから更新
+        if mapView.bounds.width > 0 && mapView.bounds.height > 0 {
+            updateMap(mapView)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -169,9 +258,6 @@ private struct RoutePreviewMapView: UIViewRepresentable {
         if let route {
             mapView.addOverlay(route.polyline)
             mapView.setVisibleMapRect(route.polyline.boundingMapRect, edgePadding: UIEdgeInsets(top: 24, left: 24, bottom: 24, right: 24), animated: false)
-        } else if let previewLine = makePreviewPolyline() {
-            mapView.addOverlay(previewLine)
-            mapView.setVisibleMapRect(previewLine.boundingMapRect, edgePadding: UIEdgeInsets(top: 24, left: 24, bottom: 24, right: 24), animated: false)
         } else {
             updateRegionFallback(mapView)
         }
@@ -186,6 +272,10 @@ private struct RoutePreviewMapView: UIViewRepresentable {
             }
             return
         }
+        updateRegionFallback(mapView, from: from, to: to)
+    }
+    
+    private func updateRegionFallback(_ mapView: MKMapView, from: LatLng, to: LatLng) {
 
         let minLat = min(from.latitude, to.latitude)
         let maxLat = max(from.latitude, to.latitude)
@@ -202,15 +292,6 @@ private struct RoutePreviewMapView: UIViewRepresentable {
         mapView.setRegion(region, animated: false)
     }
 
-    private func makePreviewPolyline() -> MKPolyline? {
-        guard let from = fromPlace, let to = toPlace else { return nil }
-        var coords = [
-            CLLocationCoordinate2D(latitude: from.latitude, longitude: from.longitude),
-            CLLocationCoordinate2D(latitude: to.latitude, longitude: to.longitude)
-        ]
-        return MKPolyline(coordinates: &coords, count: coords.count)
-    }
-
     final class Coordinator: NSObject, MKMapViewDelegate {
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let polyline = overlay as? MKPolyline {
@@ -223,7 +304,9 @@ private struct RoutePreviewMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
-            guard let anno = annotation as? RoutePreviewMKAnnotation else { return nil }
+            guard let anno = annotation as? RoutePreviewMKAnnotation else {
+                return nil
+            }
             let id = "RoutePreviewAnnotation"
             let view = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView ?? MKMarkerAnnotationView(annotation: anno, reuseIdentifier: id)
             view.annotation = anno

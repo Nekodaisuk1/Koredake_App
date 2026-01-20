@@ -33,6 +33,7 @@ struct RouteDetailView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12))
 
                         routeSummary(detail: detail)
+                        weatherStrip(detail: detail)
                         riskLists(detail: detail)
                     }
                     .padding()
@@ -46,7 +47,9 @@ struct RouteDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("編集") { showingEdit = true }
+                    Button("編集") {
+                        showingEdit = true
+                    }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("閉じる") { dismiss() }
@@ -81,6 +84,44 @@ struct RouteDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func weatherStrip(detail: RouteRiskDetail) -> some View {
+        let items = previewWeatherSamples(from: detail.samples)
+        guard !items.isEmpty else {
+            return AnyView(EmptyView())
+        }
+        return AnyView(
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(items, id: \.time) { item in
+                        VStack(spacing: 4) {
+                            Text(item.time)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Image(systemName: item.icon.systemName)
+                                .font(.caption)
+                                .foregroundColor(.primary)
+                            Text(item.label)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text("\(item.temp)℃")
+                                .font(.caption)
+                                .foregroundColor(.primary)
+                            if let rain = item.rain {
+                                Text("雨 \(rain)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(8)
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(8)
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+        )
+    }
+
     private func riskLists(detail: RouteRiskDetail) -> some View {
         let tempAlerts = temperatureChangePoints(in: detail.samples, threshold: tempDeltaThreshold)
         let weatherAlerts = weatherChangePoints(in: detail.samples)
@@ -113,15 +154,15 @@ struct RouteDetailView: View {
     private func weatherChangePoints(in samples: [RouteRiskSample]) -> [RouteRiskSample] {
         var results: [RouteRiskSample] = []
         let sorted = samples.sorted { $0.time < $1.time }
-        var previousKey: String?
+        var previousPrimary: String?
         for sample in sorted {
             guard let wx = sample.wx else { continue }
             let matches = rules.matchingRules(mode: sample.mode, wx: wx, rainAversion: 2)
-            let key = matches.map { $0.id }.sorted().joined(separator: ",")
-            if let prev = previousKey, key != prev {
+            let primary = matches.sorted { $0.priority > $1.priority }.first?.id
+            if let prev = previousPrimary, primary != prev {
                 results.append(sample)
             }
-            previousKey = key
+            previousPrimary = primary
         }
         return results
     }
@@ -209,6 +250,28 @@ struct RouteDetailView: View {
         }
         return Calendar.current.date(byAdding: .day, value: 1, to: base) ?? base
     }
+
+    private func previewWeatherSamples(from samples: [RouteRiskSample]) -> [(time: String, temp: Int, rain: String?, label: String, icon: WeatherIcon)] {
+        let df = DateFormatter()
+        df.dateFormat = "HH:mm"
+        let items = samples.compactMap { sample -> (String, Int, String?, String, WeatherIcon)? in
+            guard let wx = sample.wx else { return nil }
+            let time = df.string(from: sample.time)
+            let temp = Int(wx.feels.rounded())
+            let rain = wx.rain > 0 ? String(format: "%.1fmm/h", wx.rain) : nil
+            let label = weatherLabel(for: wx)
+            let icon = weatherIcon(for: wx)
+            return (time, temp, rain, label, icon)
+        }
+        return Array(items.prefix(8))
+    }
+
+    private func weatherLabel(for wx: WxFeature) -> String {
+        if wx.thunder { return "雷" }
+        if wx.rain >= 1.0 { return "雨" }
+        if wx.rain >= 0.1 { return "小雨" }
+        return "晴れ"
+    }
 }
 
 private struct RouteDetailMapView: UIViewRepresentable {
@@ -254,7 +317,7 @@ private struct RouteDetailMapView: UIViewRepresentable {
             let id = "RouteDetailAnnotation"
             let view = mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView ?? MKMarkerAnnotationView(annotation: anno, reuseIdentifier: id)
             view.annotation = anno
-            view.canShowCallout = true
+            view.canShowCallout = false
             switch anno.kind {
             case .weather:
                 view.markerTintColor = .systemOrange

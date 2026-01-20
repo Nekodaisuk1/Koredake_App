@@ -485,11 +485,6 @@ struct ScheduleRow: View {
                     .font(.headline)
                     .foregroundColor(.white)
                 Spacer()
-                if let score = result.advice.score {
-                    Text("スコア \(score)")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.9))
-                }
                 ImpactChip(impact: result.advice.impact)
             }
             
@@ -528,24 +523,6 @@ struct ScheduleRow: View {
                         .foregroundColor(.white.opacity(0.7))
                         .font(.caption)
                 }
-            }
-            if let weatherScore = result.advice.weatherScore, let timeScore = result.advice.timeScore {
-                HStack {
-                    Text("天気 \(weatherScore)")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                    Text("時間 \(timeScore)")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.8))
-                }
-            }
-            if let scores = result.advice.scenarioScores {
-                let s0 = scores["S0"] ?? 0
-                let s1 = scores["S1"] ?? 0
-                let s2 = scores["S2"] ?? 0
-                Text("S0 \(s0) / S1 \(s1) / S2 \(s2)")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.7))
             }
         }
         .padding(16)
